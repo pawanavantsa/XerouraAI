@@ -1,0 +1,16 @@
+.git
+.env
+__pycache__
+*.pyc
+venv
+.venv
+node_modules
+dashboard/node_modules
+dashboard/.next
+media
+staticfiles
+postgres_data
+credentials
+google-credentials.json
+.DS_Store
+*.sqlite3

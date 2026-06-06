@@ -1,0 +1,111 @@
+# CI: Next.js dashboard build + Django check/migrate/test against Postgres (pgvector) + Redis.
+# Mirrors what Vercel builds for the frontend; backend matches docker-compose data services.
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (Next.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+  backend:
+    name: Backend (Django)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_support
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      SECRET_KEY: ci-test-secret-key-not-for-production
+      DEBUG: "True"
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/test_support
+      REDIS_URL: redis://127.0.0.1:6379/0
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # core.0001_initial uses the vector column type; the extension is only
+      # created in a later migration — enable it before migrate on a fresh DB.
+      - name: Enable pgvector extension
+        run: |
+          python << 'EOF'
+          import psycopg2
+          conn = psycopg2.connect("postgres://postgres:postgres@localhost:5432/test_support")
+          conn.autocommit = True
+          with conn.cursor() as cur:
+              cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+          conn.close()
+          EOF
+
+      - name: Django system check
+        run: python manage.py check
+
+      - name: Apply migrations
+        run: python manage.py migrate --noinput
+
+      - name: Run tests
+        run: python manage.py test
