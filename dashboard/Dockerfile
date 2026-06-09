@@ -10,6 +10,8 @@ ENV NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
 COPY package.json package-lock.json* ./
 RUN npm ci
 COPY . .
+# App Router project may have no public/ — Docker COPY requires the path to exist
+RUN mkdir -p public
 RUN npm run build
 
 FROM node:20-alpine AS runner
